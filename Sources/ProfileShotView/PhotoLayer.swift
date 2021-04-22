@@ -28,7 +28,7 @@ public class PhotoLayer: CALayer
         self.background = background
         self.setNeedsDisplay()
     }
-    
+
     override public func layoutSublayers()
     {
         super.layoutSublayers()

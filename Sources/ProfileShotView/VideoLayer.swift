@@ -12,13 +12,19 @@ public class VideoLayer: AVCaptureVideoPreviewLayer
     public var containmentInsideColor  : CGColor = UIColor.green.cgColor
     public var containmentOutsideColor : CGColor = UIColor.red.cgColor
     public var faceIndicatorColor      : CGColor = UIColor.cyan.cgColor
-    public var containmentMaskColor        : CGColor = UIColor.black.withAlphaComponent(0.5).cgColor
+    public var containmentMaskColor    : CGColor = UIColor.black.withAlphaComponent(0.5).cgColor
     
     
     override public init(session: AVCaptureSession)
     {
         super.init(session: session)
         _commonInit()
+    }
+    
+    // Since we are overriding the designated initialize..
+    override public init(layer: Any)
+    {
+        super.init(layer: layer)
     }
     
     required init?(coder: NSCoder)
