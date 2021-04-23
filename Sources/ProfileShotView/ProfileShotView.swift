@@ -154,7 +154,7 @@ public class ProfileShotView: UIView
     private let _blackoutView = UIView()
 
     private let _lowpassFaceRect = LowpassFilteredRect(RC: 0.10)
-    private let _lowpassCropRect = LowpassFilteredRect(RC: 0.10)
+    private let _lowpassCropRect = LowpassFilteredRect(RC: 0.25)
     
     private var _currentOrientation: AVCaptureVideoOrientation = .portrait
     private var _isCapturingPhoto: Bool = false
@@ -440,8 +440,10 @@ extension ProfileShotView: AVCaptureVideoDataOutputSampleBufferDelegate
         }
 
         // Update stabilized frames
-        var (faceRect, cropRect) = _getNormRects(bestFace?.bounds, captureSize: image.extent.size)
+//        var (faceRect, cropRect) = _getNormRects(bestFace?.bounds, captureSize: image.extent.size)
+        var faceRect = _getNormFaceRect(bestFace?.bounds, captureSize: image.extent.size)
         faceRect = _lowpassFaceRect.update(faceRect)
+        var cropRect = _getNormCropRect(normFaceRect: faceRect, captureSize: image.extent.size)
         cropRect = _lowpassCropRect.update(cropRect)
 
         // Update containment
@@ -472,9 +474,9 @@ extension ProfileShotView: AVCaptureVideoDataOutputSampleBufferDelegate
         return biggestFace
     }
 
-    private func _getNormRects(_ faceRect: CGRect?, captureSize: CGSize) -> (CGRect?, CGRect?)
+    private func _getNormFaceRect(_ faceRect: CGRect?, captureSize: CGSize) -> CGRect?
     {
-        guard let faceRect = faceRect else { return(nil, nil) }
+        guard let faceRect = faceRect else { return nil }
 
         let normFace = CGRect(
             x      : faceRect.origin.x / captureSize.width,
@@ -482,15 +484,22 @@ extension ProfileShotView: AVCaptureVideoDataOutputSampleBufferDelegate
             width  : faceRect.size.width / captureSize.width,
             height : faceRect.size.height / captureSize.height
         )
+        
+        return normFace
+    }
+
+    private func _getNormCropRect(normFaceRect: CGRect?, captureSize: CGSize) -> CGRect?
+    {
+        guard let normFace = normFaceRect else { return nil }
 
         // Crop rect is larger... s is scale factor extension relative to the face width
         let s = faceToPhotoWidthExtensionFactor
         let viewAspectRatio = _videoLayer.bounds.size.width / _videoLayer.bounds.size.height
-        let sw: CGFloat = (faceRect.size.width * s) / captureSize.width
-        let sh: CGFloat = (faceRect.size.width * s) / captureSize.height / viewAspectRatio
+        let sw: CGFloat = normFace.width * s
+        let sh: CGFloat = normFace.width * s * (captureSize.width / captureSize.height) / viewAspectRatio
         let cropRect = CGRect(x: normFace.midX - sw/2, y: normFace.midY - sh/2, width: sw, height: sh)
 
-        return (normFace, cropRect)
+        return cropRect
     }
 }
 
