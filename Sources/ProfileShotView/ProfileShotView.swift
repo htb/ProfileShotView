@@ -7,8 +7,9 @@ import AVFoundation
 public protocol ProfileShotViewDelegate: class
 {
     func profileShotView(_ view: ProfileShotView, didUpdateFrame image: CIImage?, withFace: CIFaceFeature?)
-    func profileShotView(_ view: ProfileShotView, didCapturePhoto image: UIImage?)
     func profileShotView(_ view: ProfileShotView, containmentDidChangeTo: ProfileShotView.Containment)
+    func profileShotView(_ view: ProfileShotView, willCapturePhoto: Bool)
+    func profileShotView(_ view: ProfileShotView, didCapturePhoto image: UIImage?)
 }
 
 // Optional protocol functions
@@ -16,6 +17,7 @@ extension ProfileShotViewDelegate
 {
     func profileShotView(_ view: ProfileShotView, didUpdateFrame image: CIImage?, withFace: CIFaceFeature?)  { }
     func profileShotView(_ view: ProfileShotView, containmentDidChangeTo: ProfileShotView.Containment)  { }
+    func profileShotView(_ view: ProfileShotView, willCapturePhoto: Bool)  { }
 }
 
 
@@ -44,10 +46,6 @@ public class ProfileShotView: UIView
 {
     // MARK: - Public interface
 
-    public var containmentInsideColor: UIColor = .green
-    public var containmentOutsideColor: UIColor = .red
-    public var faceIndicatorColor: UIColor = .cyan
-    public var containmentMaskColor: UIColor = UIColor.black.withAlphaComponent(0.5)
     /// Capture photo automatically when the person smiles
     public var captureWhenSmiling: Bool = false
     /// How much wider than the face to capture for the full profile image. The height will follow from the aspect ratio of this view.
@@ -55,15 +53,58 @@ public class ProfileShotView: UIView
     /// Whether photo capture is currently in progres.
     public var isCapturingPhoto: Bool { return _isCapturingPhoto }
     /// Whether there is another camera available to switch to.
-    public var canSwitchCamera: Bool { _session.isRunning && (_frontCamera != nil && _backCamera != nil) }
+    public var canSwitchCamera: Bool { /*_session.isRunning &&*/ (_frontCamera != nil && _backCamera != nil) }
     /// Whether the video view and capture should rotate automatically with device orientation change
     public var shouldAutoRotate: Bool = false
+    /// Duration for the flip animation when switching between front and back camera.
     public var flipDuration: TimeInterval = 0.5
+    /// The time to freeze the face and crop frames before we accept that a face is lost (to avoid thrashing).
+    public var faceLostTimeout: TimeInterval = 0.5
+    /// Duration for the photo to animate from the video crop size to full size.
+    public var photoResizeDuration: TimeInterval = 0.5
+
+    // Transient properties
     
     public var photoBackground: PhotoLayer.Background
     {
         get { return _photoLayer.background }
         set { _photoLayer.background = newValue }
+    }
+
+    public var faceIndicatorColor: UIColor
+    {
+        get { return UIColor(cgColor: _videoLayer.faceIndicatorColor) }
+        set { _videoLayer.faceIndicatorColor = newValue.cgColor }
+    }
+    public var faceIndicatorLineWidth: CGFloat
+    {
+        get { _videoLayer.faceIndicatorLineWidth }
+        set { _videoLayer.faceIndicatorLineWidth = newValue }
+    }
+    public var containmentInsideColor: UIColor
+    {
+        get { return UIColor(cgColor: _videoLayer.containmentInsideColor) }
+        set { _videoLayer.containmentInsideColor = newValue.cgColor }
+    }
+    public var containmentOutsideColor: UIColor
+    {
+        get { return UIColor(cgColor: _videoLayer.containmentOutsideColor) }
+        set { _videoLayer.containmentOutsideColor = newValue.cgColor }
+    }
+    public var containmentMaskColor: UIColor
+    {
+        get { return UIColor(cgColor: _videoLayer.containmentMaskColor) }
+        set { _videoLayer.containmentMaskColor = newValue.cgColor }
+    }
+    public var containmentLineWidth: CGFloat
+    {
+        get { _videoLayer.containmentLineWidth }
+        set { _videoLayer.containmentLineWidth = newValue }
+    }
+    public var containmentCornerRadius: CGFloat
+    {
+        get { _videoLayer.containmentCornerRadius }
+        set { _videoLayer.containmentCornerRadius = newValue }
     }
 
     /// Whether the crop rectangle around the face is inside the view.
@@ -113,23 +154,35 @@ public class ProfileShotView: UIView
         NotificationCenter.default.removeObserver(self)
     }
 
-    public func startCamera()
+    public func startCamera(suspended: Bool = false)
     {
         if _session.isRunning { return }
         containment = .none
         _isCapturingPhoto = false
         _videoLayer.isHidden = false
         _photoLayer.isHidden = true
-        _session.startRunning()
+        if !suspended {
+            _session.startRunning()
+        }
     }
 
     public func stopCamera()
     {
-        _videoLayer.isHidden = true
+//        _videoLayer.isHidden = true
         _session.stopRunning()
         containment = .none
     }
 
+    public func suspend()
+    {
+        _session.stopRunning()
+    }
+
+    public func resume()
+    {
+        _session.startRunning()
+    }
+    
     public func capturePhoto()
     {
         _capturePhoto()
@@ -164,6 +217,7 @@ public class ProfileShotView: UIView
     private var _backCamera: AVCaptureDevice? = nil
     
     private var _isMirrored: Bool { _captureDevice == _frontCamera }
+    private var _faceLostDate: Date? = nil
 }
 
 
@@ -290,7 +344,7 @@ extension ProfileShotView
 
         let photoConnection = _photoOutput.connection(with: .video)
         photoConnection?.videoOrientation = orientation
-        // Note: Not mirrored
+        photoConnection?.isVideoMirrored = _isMirrored
         
         completion(.success)
     }
@@ -362,19 +416,6 @@ extension ProfileShotView
         containment = .none
 
         _addInputOutput(camera, completion: { _ in })
-//
-//        do {
-//            let cameraInput = try AVCaptureDeviceInput(device: camera)
-//            if !_session.canAddInput(cameraInput) {
-//                //completion(.cameraInputError)
-//                return
-//            }
-//            _session.addInput(cameraInput)
-//            _captureDevice = camera
-//        } catch {
-//            //completion(.error(error))
-//            return
-//        }
         
 //        _videoLayer.session = _session
         _session.startRunning()
@@ -440,8 +481,27 @@ extension ProfileShotView: AVCaptureVideoDataOutputSampleBufferDelegate
         }
 
         // Update stabilized frames
-//        var (faceRect, cropRect) = _getNormRects(bestFace?.bounds, captureSize: image.extent.size)
+        
         var faceRect = _getNormFaceRect(bestFace?.bounds, captureSize: image.extent.size)
+        
+        // Avoid nil
+        if faceRect == nil {
+            if let ts = _faceLostDate {
+                if (-ts.timeIntervalSinceNow) < faceLostTimeout {
+                    // Do not update
+                    return
+                } else {
+                    // Accept that it is lost and continue with nil faceRect
+                }
+            } else {
+                // Mark the time we lost the face, but do not update
+                _faceLostDate = Date()
+                return
+            }
+        } else {
+            _faceLostDate = nil
+        }
+        
         faceRect = _lowpassFaceRect.update(faceRect)
         var cropRect = _getNormCropRect(normFaceRect: faceRect, captureSize: image.extent.size)
         cropRect = _lowpassCropRect.update(cropRect)
@@ -523,9 +583,14 @@ extension ProfileShotView: AVCapturePhotoCaptureDelegate
             photoSettings.previewPhotoFormat = nil
             photoSettings.isDepthDataFiltered = true
             _isCapturingPhoto = true
-            _photoOutput.capturePhoto(with: photoSettings, delegate: self)
+            DispatchQueue.main.async {
+                self.delegate?.profileShotView(self, willCapturePhoto: true)
+                self._photoOutput.capturePhoto(with: photoSettings, delegate: self)
+            }
         } else {
-            delegate?.profileShotView(self, didCapturePhoto: nil)
+            DispatchQueue.main.async {
+                self.delegate?.profileShotView(self, willCapturePhoto: false)
+            }
         }
     }
 
@@ -579,26 +644,42 @@ extension ProfileShotView: AVCapturePhotoCaptureDelegate
         }
 
         // Create a saveable UIImage to send to the delegate
-        let uiImage = UIImage(cgImage: croppedCGImage)
-        var saveableImage: UIImage? = nil
-        if let pngData = uiImage.pngData() {
-            saveableImage = UIImage(data: pngData)
+        let saveableImage = _getSaveableImage(cgImage: croppedCGImage)
+        
+        let layerRect = _videoLayer.layerRect(normRect: useRect, captureSize: maskedImage.extent.size)!
+        DispatchQueue.main.async {
+            self._displayPhoto(croppedCGImage, layerRect: layerRect)
+            self.delegate?.profileShotView(self, didCapturePhoto: saveableImage)
+        }
+    }
+    
+    private func _getSaveableImage(cgImage: CGImage) -> UIImage?
+    {
+        var image = UIImage(cgImage: cgImage, scale: 1, orientation: _isMirrored ? .upMirrored : .up)
+        
+        if image.imageOrientation != UIImage.Orientation.up {
+            UIGraphicsBeginImageContext(image.size)
+            image.draw(in: CGRect(origin: .zero, size: image.size))
+            let copy = UIGraphicsGetImageFromCurrentImageContext()
+            UIGraphicsEndImageContext()
+            if let i = copy { image = i } else { return nil }
         }
         
-        DispatchQueue.main.async {
-            self._displayPhoto(croppedCGImage)
-            self.delegate?.profileShotView(self, didCapturePhoto: saveableImage)
+        if let pngData = image.pngData() {
+            return UIImage(data: pngData)
+        } else {
+            return nil
         }
     }
 
     private func _getCroppedCGImage(_ ciImage: CIImage, relCIRect: CGRect?) -> CGImage?
     {
-        var relRect = relCIRect ?? CGRect(x: 0, y: 0, width: 1, height: 1)
+        let relRect = relCIRect ?? CGRect(x: 0, y: 0, width: 1, height: 1)
 
-        // The rect is for the possibly mirrored video image, so mirror it back here since the photo is not mirrored
-        if _isMirrored {
-            relRect.origin.x = 1 - relRect.origin.x - relRect.width
-        }
+//        // The rect is for the possibly mirrored video image, so mirror it back here since the photo is not mirrored
+//        if _isMirrored {
+//            relRect.origin.x = 1 - relRect.origin.x - relRect.width
+//        }
         let w = ciImage.extent.size.width
         let h = ciImage.extent.size.height
         let rect = CGRect(x: relRect.origin.x * w, y: relRect.origin.y * h, width: relRect.size.width * w, height: relRect.size.height * h)
@@ -616,19 +697,73 @@ extension ProfileShotView
 {
     private func _displayVideoOverlays(captureSize: CGSize)
     {
-        _videoLayer.faceIndicatorColor      = faceIndicatorColor.cgColor
-        _videoLayer.containmentInsideColor  = containmentInsideColor.cgColor
-        _videoLayer.containmentOutsideColor = containmentOutsideColor.cgColor
-        _videoLayer.containmentMaskColor    = containmentMaskColor.cgColor
-
         _videoLayer.drawOverlays(faceRect: _lowpassFaceRect.value, cropRect: _lowpassCropRect.value, captureSize: captureSize)
     }
 
-    private func _displayPhoto(_ cgImage: CGImage)
+    private func _displayPhoto(_ cgImage: CGImage, layerRect: CGRect)
     {
         _photoLayer.photo = cgImage
 
-        _videoLayer.isHidden = true
+        let duration = photoResizeDuration
+        let fromPosition = CGPoint(x: layerRect.midX, y: layerRect.midY)
+        let toPosition = CGPoint(x: bounds.midX, y: bounds.midY)
+        let fromBounds = CGRect(origin: .zero, size: layerRect.size)
+        let toBounds   = self.bounds
+
+        let targetBlock = {
+            // Make sure we end with the target states, even if the animation failed
+
+            self._videoLayer.isHidden = true
+            self._videoLayer.opacity = 1.0 // Restore it now that it is hidden
+            // Note: Face and crop frame layers will recover by themselves
+
+            self._photoLayer._backgroundLayer.opacity = 1.0
+            self._photoLayer._photoLayer.position = toPosition
+            self._photoLayer._photoLayer.bounds = toBounds
+            self._photoLayer.isHidden = false
+            
+
+            self._videoLayer.removeAllAnimations()
+            self._photoLayer._backgroundLayer.removeAllAnimations()
+            self._photoLayer._photoLayer.removeAllAnimations()
+        }
+        
+        if duration == 0 {
+            targetBlock()
+            return
+        }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        _photoLayer.displayIfNeeded()
         _photoLayer.isHidden = false
+        _videoLayer._faceFrameLayer.isHidden = true
+        _videoLayer._cropFrameLayer.isHidden = true
+
+        CATransaction.setCompletionBlock(targetBlock)
+
+        _addAnimation(_videoLayer,                  "opacity" , duration, from: 1.0         , to: 0.0       , timing: .easeIn)
+        _addAnimation(_photoLayer._backgroundLayer, "opacity" , duration, from: 0.0         , to: 1.0       , timing: .easeIn)
+        _addAnimation(_photoLayer._photoLayer,      "position", duration, from: fromPosition, to: toPosition, timing: .easeIn)
+        _addAnimation(_photoLayer._photoLayer,      "bounds"  , duration, from: fromBounds  , to: toBounds  , timing: .easeIn)
+        
+        CATransaction.commit()
+    }
+    
+    private func _addAnimation(
+        _ layer: CALayer, _ keyPath: String, _ duration: TimeInterval,
+        from fromValue: Any, to toValue: Any,
+        timing: CAMediaTimingFunctionName = .default
+    )
+    {
+        let a = CABasicAnimation(keyPath: keyPath)
+        a.duration = duration
+        a.fromValue = fromValue
+        a.toValue = toValue
+        a.isRemovedOnCompletion = true
+        a.fillMode = .forwards
+        a.timingFunction = CAMediaTimingFunction(name: timing)
+        layer.add(a, forKey: keyPath)
     }
 }
+

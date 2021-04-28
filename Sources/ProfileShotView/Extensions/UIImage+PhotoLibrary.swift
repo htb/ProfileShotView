@@ -12,13 +12,19 @@ extension UIImage
                 do {
                     try PHPhotoLibrary.shared().performChangesAndWait {
                         PHAssetChangeRequest.creationRequestForAsset(from: image)
-                        completion?(true, nil)
+                        DispatchQueue.main.async {
+                            completion?(true, nil)
+                        }
                     }
                 } catch let error {
-                    completion?(false, error)
+                    DispatchQueue.main.async {
+                        completion?(false, error)
+                    }
                 }
             } else {
-                completion?(false, NSError(domain: PHPhotosError.errorDomain, code: PHPhotosError.libraryVolumeOffline.rawValue, userInfo: nil))
+                DispatchQueue.main.async {
+                    completion?(false, PHPhotosError(.libraryVolumeOffline))
+                }
             }
         }
     }

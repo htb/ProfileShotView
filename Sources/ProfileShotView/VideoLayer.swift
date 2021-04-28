@@ -4,16 +4,19 @@ import UIKit // For default colors
 
 public class VideoLayer: AVCaptureVideoPreviewLayer
 {
-    private let _maskLayer = CAShapeLayer()
-    private let _faceFrameLayer = CAShapeLayer()
-    private let _cropFrameLayer = CAShapeLayer()
+    internal let _maskLayer = CAShapeLayer()
+    internal let _faceFrameLayer = CAShapeLayer()
+    internal let _cropFrameLayer = CAShapeLayer()
     
     
+    public var faceIndicatorColor      : CGColor = UIColor.cyan.cgColor
+    public var faceIndicatorLineWidth  : CGFloat = 3
     public var containmentInsideColor  : CGColor = UIColor.green.cgColor
     public var containmentOutsideColor : CGColor = UIColor.red.cgColor
-    public var faceIndicatorColor      : CGColor = UIColor.cyan.cgColor
     public var containmentMaskColor    : CGColor = UIColor.black.withAlphaComponent(0.5).cgColor
-    
+    public var containmentLineWidth    : CGFloat = 5
+    public var containmentCornerRadius : CGFloat = 15
+
     
     override public init(session: AVCaptureSession)
     {
@@ -51,7 +54,7 @@ public class VideoLayer: AVCaptureVideoPreviewLayer
     private func _getMaskPath(_ rect: CGRect) -> CGPath
     {
         let path = UIBezierPath(rect: bounds)
-        let maskPath = UIBezierPath(rect: rect)
+        let maskPath = UIBezierPath(roundedRect: rect, cornerRadius: containmentCornerRadius)
         path.append(maskPath)
         path.usesEvenOddFillRule = true
         return path.cgPath
@@ -135,7 +138,7 @@ public class VideoLayer: AVCaptureVideoPreviewLayer
         // Note: Face and crop rects are in CI space and normalized relative to captureSize
 
         if let layerRect = layerRect(normRect: faceRect, captureSize: captureSize) {
-            _faceFrameLayer.lineWidth = 3
+            _faceFrameLayer.lineWidth = faceIndicatorLineWidth
             _faceFrameLayer.strokeColor = faceIndicatorColor
             _faceFrameLayer.path = Self._getFaceIndicatorPath(layerRect)
             _faceFrameLayer.isHidden = false
@@ -146,9 +149,9 @@ public class VideoLayer: AVCaptureVideoPreviewLayer
         if let layerRect = layerRect(normRect: cropRect, captureSize: captureSize) {
             let isInside = bounds.contains(layerRect)
 
-            _cropFrameLayer.lineWidth = (isInside ? 5 : 3)
+            _cropFrameLayer.lineWidth = containmentLineWidth //(isInside ? 5 : 3)
             _cropFrameLayer.strokeColor = (isInside ? containmentInsideColor : containmentOutsideColor)
-            _cropFrameLayer.path = UIBezierPath(rect: layerRect).cgPath
+            _cropFrameLayer.path = UIBezierPath.init(roundedRect: layerRect, cornerRadius: containmentCornerRadius).cgPath
             _cropFrameLayer.isHidden = false
             
             _maskLayer.fillRule = .evenOdd

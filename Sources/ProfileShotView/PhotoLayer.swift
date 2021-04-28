@@ -11,31 +11,49 @@ public class PhotoLayer: CALayer
         case image(CGImage)
     }
     
-    private let _photoLayer = CALayer()
+    internal let _photoLayer = CALayer()
+    internal let _backgroundLayer = CALayer()
     
-    public var background: Background = .checkerboard(20) { didSet { self.setNeedsDisplay() } }
-    public var photo: CGImage? = nil { didSet {
-        _drawPhoto()
-        //self.setNeedsDisplay()
+    public var background: Background = .checkerboard(20) { didSet {
+        _backgroundLayer.setNeedsDisplay()
     } }
-
+    public var photo: CGImage? = nil { didSet {
+        //_drawPhoto()
+        setNeedsDisplay()
+    } }
     
     public convenience init(_ background: Background)
     {
         self.init()
+        _backgroundLayer.contentsGravity = .resizeAspectFill
         _photoLayer.contentsGravity = .resizeAspect
+        addSublayer(_backgroundLayer)
         addSublayer(_photoLayer)
-        self.background = background
+        _backgroundLayer.delegate = self
         self.setNeedsDisplay()
     }
 
     override public func layoutSublayers()
     {
         super.layoutSublayers()
+        _backgroundLayer.frame = bounds
         _photoLayer.frame = bounds
     }
     
     override public func draw(in ctx: CGContext)
+    {
+        _drawPhoto()
+    }
+    
+    public func _drawPhoto()
+    {
+        _photoLayer.contents = photo
+    }
+}
+
+extension PhotoLayer: CALayerDelegate
+{
+    public func draw(_ layer: CALayer, in ctx: CGContext)
     {
         switch background
         {
@@ -43,8 +61,6 @@ public class PhotoLayer: CALayer
         case .color(let color): _drawColor(in: ctx, color: color)
         case .image(let image): _drawImage(in: ctx, image: image)
         }
-        
-        //_drawPhoto()
     }
     
     private func _drawCheckerboard(in ctx: CGContext, blockSize: CGFloat)
@@ -76,10 +92,5 @@ public class PhotoLayer: CALayer
         ctx.scaleBy(x: 1, y: -1)
         ctx.draw(image, in: bounds)
         ctx.restoreGState()
-    }
-    
-    public func _drawPhoto()
-    {
-        _photoLayer.contents = photo
     }
 }
