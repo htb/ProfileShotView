@@ -139,6 +139,8 @@ public class ProfileShotView: UIView
 
     private func _commonInit()
     {
+        translatesAutoresizingMaskIntoConstraints = false
+
         _videoLayer.videoGravity = .resizeAspectFill
         layer.addSublayer(_videoLayer)
         layer.addSublayer(_photoLayer)
