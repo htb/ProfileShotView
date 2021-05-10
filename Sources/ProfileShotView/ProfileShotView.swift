@@ -158,7 +158,9 @@ public class ProfileShotView: UIView
 
     public func startCamera(suspended: Bool = false)
     {
-        if _session.isRunning { return }
+        if _cameraStarted { return }
+        _cameraStarted = true
+        
         containment = .none
         _isCapturingPhoto = false
         _videoLayer.isHidden = false
@@ -173,16 +175,22 @@ public class ProfileShotView: UIView
 //        _videoLayer.isHidden = true
         _session.stopRunning()
         containment = .none
+        
+        _cameraStarted = false
     }
 
     public func suspend()
     {
-        _session.stopRunning()
+        if _cameraStarted {
+            _session.stopRunning()
+        }
     }
 
     public func resume()
     {
-        _session.startRunning()
+        if _cameraStarted {
+            _session.startRunning()
+        }
     }
     
     public func capturePhoto()
@@ -220,6 +228,7 @@ public class ProfileShotView: UIView
     
     private var _isMirrored: Bool { _captureDevice == _frontCamera }
     private var _faceLostDate: Date? = nil
+    private var _cameraStarted: Bool = false
 }
 
 
@@ -248,10 +257,12 @@ extension ProfileShotView
             _configureCaptureSession(position, completion: completion)
         case .notDetermined:
             AVCaptureDevice.requestAccess(for: .video) { granted in
-                if granted {
-                    self._configureCaptureSession(position, completion: completion)
-                } else {
-                    completion(.accessDenied)
+                DispatchQueue.main.async {
+                    if granted {
+                        self._configureCaptureSession(position, completion: completion)
+                    } else {
+                        completion(.accessDenied)
+                    }
                 }
             }
         case .denied:

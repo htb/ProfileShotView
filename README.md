@@ -33,9 +33,6 @@ Typically start and stop the camera in `viewWillAppear` and `viewDidDisappear`, 
 
 Simply call `capturePhoto` when you want to capture a photo, and the finished photo will be provided in the delegate method `profileShotView:didCapturePhoto`.
 
-### Save photo to photo library
-
-Use the utility function `uiimage.saveToPhotoLibrary` to save the photo. It will ask for photo library permission, if required.
 
 ### Options
 

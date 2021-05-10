@@ -4,7 +4,7 @@ import PackageDescription
 
 let package = Package(
     name: "ProfileShotView",
-    platforms: [.iOS(.v13)],
+    platforms: [.iOS(.v12)],
     products: [
         .library(name: "ProfileShotView", targets: ["ProfileShotView"]),
     ],

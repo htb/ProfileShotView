@@ -65,9 +65,18 @@ extension PhotoLayer: CALayerDelegate
     
     private func _drawCheckerboard(in ctx: CGContext, blockSize: CGFloat)
     {
-        ctx.setFillColor(UIColor.systemBackground.cgColor)
+        let bg1, bg2: UIColor
+        if #available(iOS 13, *) {
+            bg1 = UIColor.systemBackground
+            bg2 = UIColor.secondarySystemBackground
+        } else {
+            bg1 = UIColor.white
+            bg2 = UIColor.lightGray
+        }
+        
+        ctx.setFillColor(bg1.cgColor)
         ctx.fill(bounds)
-        ctx.setFillColor(UIColor.secondarySystemBackground.cgColor)
+        ctx.setFillColor(bg2.cgColor)
         let columns = Int(ceil(bounds.width / blockSize))
         let rows = Int(ceil(bounds.height / blockSize))
         for row in 0 ..< rows {
