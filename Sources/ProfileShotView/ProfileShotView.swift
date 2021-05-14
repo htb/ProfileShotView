@@ -228,7 +228,7 @@ public class ProfileShotView: UIView
     private var _backCamera: AVCaptureDevice? = nil
     
     private var _isMirrored: Bool { _captureDevice == _frontCamera }
-    private var _faceLostDate: Date? = nil
+//    private var _faceLostDate: Date? = nil
     private var _cameraStarted: Bool = false
 }
 
@@ -559,23 +559,23 @@ extension ProfileShotView: AVCaptureMetadataOutputObjectsDelegate
 
         // Update stabilized frames
         
-        // Avoid nil
-        if faceRect == nil {
-            if let ts = _faceLostDate {
-                if (-ts.timeIntervalSinceNow) < faceLostTimeout {
-                    // Do not update
-                    return
-                } else {
-                    // Accept that it is lost and continue with nil faceRect
-                }
-            } else {
-                // Mark the time we lost the face, but do not update
-                _faceLostDate = Date()
-                return
-            }
-        } else {
-            _faceLostDate = nil
-        }
+//        // Avoid nil
+//        if faceRect == nil {
+//            if let ts = _faceLostDate {
+//                if (-ts.timeIntervalSinceNow) < faceLostTimeout {
+//                    // Do not update
+//                    return
+//                } else {
+//                    // Accept that it is lost and continue with nil faceRect
+//                }
+//            } else {
+//                // Mark the time we lost the face, but do not update
+//                _faceLostDate = Date()
+//                return
+//            }
+//        } else {
+//            _faceLostDate = nil
+//        }
 
         faceRect = _lowpassFaceRect.update(faceRect)
         var cropRect = _getCropRect(faceRect: faceRect)
