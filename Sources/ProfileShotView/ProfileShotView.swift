@@ -6,7 +6,7 @@ import AVFoundation
 
 public protocol ProfileShotViewDelegate: class
 {
-    func profileShotView(_ view: ProfileShotView, didUpdateFrame image: CIImage?, withFace: CIFaceFeature?)
+    func profileShotView(_ view: ProfileShotView, didUpdateFrame image: CIImage?, withFaceRect: CGRect?, faceFeatures: CIFaceFeature?)
     func profileShotView(_ view: ProfileShotView, containmentDidChangeTo: ProfileShotView.Containment)
     func profileShotView(_ view: ProfileShotView, willCapturePhoto: Bool)
     func profileShotView(_ view: ProfileShotView, didCapturePhoto image: UIImage?)
@@ -15,7 +15,7 @@ public protocol ProfileShotViewDelegate: class
 // Optional protocol functions
 extension ProfileShotViewDelegate
 {
-    func profileShotView(_ view: ProfileShotView, didUpdateFrame image: CIImage?, withFace: CIFaceFeature?)  { }
+    func profileShotView(_ view: ProfileShotView, didUpdateFrame image: CIImage?, withFaceRect: CGRect?, faceFeatures: CIFaceFeature?)  { }
     func profileShotView(_ view: ProfileShotView, containmentDidChangeTo: ProfileShotView.Containment)  { }
     func profileShotView(_ view: ProfileShotView, willCapturePhoto: Bool)  { }
 }
@@ -35,6 +35,7 @@ extension ProfileShotView
         case cameraInputError
         case videoOutputError
         case photoOutputError
+        case metadataOutputError
         case error(Error)
     }
 }
@@ -217,7 +218,7 @@ public class ProfileShotView: UIView
     private let _blackoutView = UIView()
 
     private let _lowpassFaceRect = LowpassFilteredRect(RC: 0.10)
-    private let _lowpassCropRect = LowpassFilteredRect(RC: 0.25)
+    private let _lowpassCropRect = LowpassFilteredRect(RC: 0.10)//0.25)
     
     private var _currentOrientation: AVCaptureVideoOrientation = .portrait
     private var _isCapturingPhoto: Bool = false
@@ -360,6 +361,19 @@ extension ProfileShotView
         photoConnection?.isVideoMirrored = _isMirrored
         
         completion(.success)
+        
+        // Metadata output (for the face)
+        
+        let metadataOutput = AVCaptureMetadataOutput()
+        metadataOutput.setMetadataObjectsDelegate(self, queue: _dataOutputQueue)
+        if _session.canAddOutput(metadataOutput) {
+            _session.addOutput(metadataOutput)
+        } else {
+            completion(.metadataOutputError)
+            return
+        }
+        
+        metadataOutput.metadataObjectTypes = [.face]
     }
     
     public func _switchCamera(_ position: AVCaptureDevice.Position?)
@@ -415,7 +429,7 @@ extension ProfileShotView
     
     private func _deactivateCamera()
     {
-        _videoLayer.drawOverlays(faceRect: nil, cropRect: nil, captureSize: .zero)
+        _videoLayer.drawOverlays(faceRect: nil, cropRect: nil)
 //        _videoLayer.session = nil
         _session.stopRunning()
         
@@ -433,7 +447,6 @@ extension ProfileShotView
 //        _videoLayer.session = _session
         _session.startRunning()
     }
-
 }
 
 
@@ -489,13 +502,62 @@ extension ProfileShotView: AVCaptureVideoDataOutputSampleBufferDelegate
 
         let bestFace = _getBiggestFace(image: image)
 
-        DispatchQueue.main.async {
-            self.delegate?.profileShotView(self, didUpdateFrame: image, withFace: bestFace)
+        DispatchQueue.main.async { [ weak self] in
+            guard let self = self else { return }
+            self.delegate?.profileShotView(self, didUpdateFrame: image, withFaceRect: self._lowpassFaceRect.value, faceFeatures: bestFace)
+        }
+
+        DispatchQueue.main.async { [weak self] in
+            self?._displayVideoOverlays()
+    }
+
+        // Capture photo if smiling
+        if !_isCapturingPhoto && captureWhenSmiling && bestFace?.hasSmile == true { capturePhoto() }
+    }
+
+    private func _getBiggestFace(image: CIImage) -> CIFaceFeature?
+    {
+        let options: [String: Any] = [
+            CIDetectorSmile: true,
+            CIDetectorTracking: true
+        ]
+        let allFeatures = _faceDetector?.features(in: image, options: options)
+        let faceFeatures = allFeatures?.compactMap { $0 as? CIFaceFeature }
+        let biggestFace = faceFeatures?.max(by: { $0.bounds.area < $1.bounds.area } )
+        return biggestFace
+    }
+}
+
+
+// MARK: - Metadata output (face)
+
+extension ProfileShotView: AVCaptureMetadataOutputObjectsDelegate
+{
+    private func _getCropRect(faceRect: CGRect?) -> CGRect?
+    {
+        guard let faceRect = faceRect else { return nil }
+
+        // Crop rect is larger... s is scale factor extension relative to the face width
+        let s = faceToPhotoWidthExtensionFactor
+        let viewAspectRatio = _videoLayer.bounds.size.width / _videoLayer.bounds.size.height
+        let sw: CGFloat = faceRect.width * s
+        let sh: CGFloat = faceRect.width * s / viewAspectRatio
+        let cropRect = CGRect(x: faceRect.midX - sw/2, y: faceRect.midY - sh/2, width: sw, height: sh)
+
+        return cropRect
+    }
+
+    public func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection)
+    {
+        let faces = metadataObjects.compactMap( { $0 as? AVMetadataFaceObject } )
+        let biggestFace = faces.max(by: { $0.bounds.area < $1.bounds.area } )
+
+        var faceRect: CGRect? = nil
+        if let biggestFace = biggestFace, let t = _videoLayer.transformedMetadataObject(for: biggestFace) {
+            faceRect = t.bounds
         }
 
         // Update stabilized frames
-        
-        var faceRect = _getNormFaceRect(bestFace?.bounds, captureSize: image.extent.size)
         
         // Avoid nil
         if faceRect == nil {
@@ -514,65 +576,17 @@ extension ProfileShotView: AVCaptureVideoDataOutputSampleBufferDelegate
         } else {
             _faceLostDate = nil
         }
-        
-        faceRect = _lowpassFaceRect.update(faceRect)
-        var cropRect = _getNormCropRect(normFaceRect: faceRect, captureSize: image.extent.size)
-        cropRect = _lowpassCropRect.update(cropRect)
 
+        faceRect = _lowpassFaceRect.update(faceRect)
+        var cropRect = _getCropRect(faceRect: faceRect)
+        cropRect = _lowpassCropRect.update(cropRect)
+        
         // Update containment
         if let cropRect = cropRect {
-            let relBounds = _videoLayer.normRect(captureSize: image.extent.size)
-            containment = relBounds.contains(cropRect) ? .inside : .outside
+            containment = _videoLayer.bounds.contains(cropRect) ? .inside : .outside
         } else {
             containment = .none
         }
-
-        DispatchQueue.main.async { [weak self] in
-            self?._displayVideoOverlays(captureSize: image.extent.size)
-        }
-
-        // Capture photo if smiling
-        if !_isCapturingPhoto && captureWhenSmiling && bestFace?.hasSmile == true { capturePhoto() }
-    }
-
-    private func _getBiggestFace(image: CIImage) -> CIFaceFeature?
-    {
-        let options: [String: Any] = [
-            CIDetectorSmile: true,
-            CIDetectorTracking: true
-        ]
-        let allFeatures = _faceDetector?.features(in: image, options: options)
-        let faceFeatures = allFeatures?.compactMap { $0 as? CIFaceFeature }
-        let biggestFace = faceFeatures?.max(by: { $0.bounds.area < $1.bounds.area } )
-        return biggestFace
-    }
-
-    private func _getNormFaceRect(_ faceRect: CGRect?, captureSize: CGSize) -> CGRect?
-    {
-        guard let faceRect = faceRect else { return nil }
-
-        let normFace = CGRect(
-            x      : faceRect.origin.x / captureSize.width,
-            y      : faceRect.origin.y / captureSize.height,
-            width  : faceRect.size.width / captureSize.width,
-            height : faceRect.size.height / captureSize.height
-        )
-        
-        return normFace
-    }
-
-    private func _getNormCropRect(normFaceRect: CGRect?, captureSize: CGSize) -> CGRect?
-    {
-        guard let normFace = normFaceRect else { return nil }
-
-        // Crop rect is larger... s is scale factor extension relative to the face width
-        let s = faceToPhotoWidthExtensionFactor
-        let viewAspectRatio = _videoLayer.bounds.size.width / _videoLayer.bounds.size.height
-        let sw: CGFloat = normFace.width * s
-        let sh: CGFloat = normFace.width * s * (captureSize.width / captureSize.height) / viewAspectRatio
-        let cropRect = CGRect(x: normFace.midX - sw/2, y: normFace.midY - sh/2, width: sw, height: sh)
-
-        return cropRect
     }
 }
 
@@ -640,16 +654,18 @@ extension ProfileShotView: AVCapturePhotoCaptureDelegate
         }
 
         // Crop around the face if we have a crop rect inside the video layer.
-        // Else grab the entire video layer
-        let relBounds = _videoLayer.normRect(captureSize: maskedImage.extent.size)
-        let cropRect = _lowpassCropRect.value
+        // Else grab the entire video layer.
         let useRect: CGRect
-        if let cropRect = cropRect, relBounds.contains(cropRect) {
+        if let cropRect = _lowpassCropRect.value, _videoLayer.bounds.contains(cropRect) {
             useRect = cropRect
         } else {
-            useRect = relBounds
+            useRect = _videoLayer.bounds
         }
-        guard let croppedCGImage = _getCroppedCGImage(maskedImage, relCIRect: useRect) else {
+        
+        // Convert from layer rect to relative video capture rect.
+        let normVideoRect = _videoLayer.normRect(layerRect: useRect, captureSize: maskedImage.extent.size)
+        
+        guard let croppedCGImage = _getCroppedCGImage(maskedImage, relCIRect: normVideoRect) else {
             DispatchQueue.main.async {
                 self.delegate?.profileShotView(self, didCapturePhoto: nil)
             }
@@ -659,7 +675,7 @@ extension ProfileShotView: AVCapturePhotoCaptureDelegate
         // Create a saveable UIImage to send to the delegate
         let saveableImage = _getSaveableImage(cgImage: croppedCGImage)
         
-        let layerRect = _videoLayer.layerRect(normRect: useRect, captureSize: maskedImage.extent.size)!
+        let layerRect = useRect
         DispatchQueue.main.async {
             self._displayPhoto(croppedCGImage, layerRect: layerRect)
             self.delegate?.profileShotView(self, didCapturePhoto: saveableImage)
@@ -708,9 +724,9 @@ extension ProfileShotView: AVCapturePhotoCaptureDelegate
 
 extension ProfileShotView
 {
-    private func _displayVideoOverlays(captureSize: CGSize)
+    private func _displayVideoOverlays()
     {
-        _videoLayer.drawOverlays(faceRect: _lowpassFaceRect.value, cropRect: _lowpassCropRect.value, captureSize: captureSize)
+        _videoLayer.drawOverlays(faceRect: _lowpassFaceRect.value, cropRect: _lowpassCropRect.value)
     }
 
     private func _displayPhoto(_ cgImage: CGImage, layerRect: CGRect)
@@ -779,4 +795,3 @@ extension ProfileShotView
         layer.add(a, forKey: keyPath)
     }
 }
-

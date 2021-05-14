@@ -133,11 +133,9 @@ public class VideoLayer: AVCaptureVideoPreviewLayer
         return path.cgPath
     }
 
-    public func drawOverlays(faceRect: CGRect?, cropRect: CGRect?, captureSize: CGSize)
+    public func drawOverlays(faceRect: CGRect?, cropRect: CGRect?)
     {
-        // Note: Face and crop rects are in CI space and normalized relative to captureSize
-
-        if let layerRect = layerRect(normRect: faceRect, captureSize: captureSize) {
+        if let layerRect = faceRect {
             _faceFrameLayer.lineWidth = faceIndicatorLineWidth
             _faceFrameLayer.strokeColor = faceIndicatorColor
             _faceFrameLayer.path = Self._getFaceIndicatorPath(layerRect)
@@ -146,10 +144,10 @@ public class VideoLayer: AVCaptureVideoPreviewLayer
             _faceFrameLayer.isHidden = true
         }
 
-        if let layerRect = layerRect(normRect: cropRect, captureSize: captureSize) {
+        if let layerRect = cropRect {
             let isInside = bounds.contains(layerRect)
 
-            _cropFrameLayer.lineWidth = containmentLineWidth //(isInside ? 5 : 3)
+            _cropFrameLayer.lineWidth = containmentLineWidth
             _cropFrameLayer.strokeColor = (isInside ? containmentInsideColor : containmentOutsideColor)
             _cropFrameLayer.path = UIBezierPath.init(roundedRect: layerRect, cornerRadius: containmentCornerRadius).cgPath
             _cropFrameLayer.isHidden = false
