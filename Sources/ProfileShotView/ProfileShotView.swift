@@ -4,8 +4,10 @@ import AVFoundation
 
 // MARK: - Delegate protocol
 
-public protocol ProfileShotViewDelegate: class
+public protocol ProfileShotViewDelegate: AnyObject
 {
+    func profileShotView(_ view: ProfileShotView, didChangeState state: ProfileShotView.State)
+    
     func profileShotView(_ view: ProfileShotView, didUpdateFrame image: CIImage?, withFaceRect: CGRect?, faceFeatures: CIFaceFeature?)
     func profileShotView(_ view: ProfileShotView, containmentDidChangeTo: ProfileShotView.Containment)
     func profileShotView(_ view: ProfileShotView, willCapturePhoto: Bool)
@@ -18,6 +20,7 @@ extension ProfileShotViewDelegate
     func profileShotView(_ view: ProfileShotView, didUpdateFrame image: CIImage?, withFaceRect: CGRect?, faceFeatures: CIFaceFeature?)  { }
     func profileShotView(_ view: ProfileShotView, containmentDidChangeTo: ProfileShotView.Containment)  { }
     func profileShotView(_ view: ProfileShotView, willCapturePhoto: Bool)  { }
+    func profileShotView(_ view: ProfileShotView, didCapturePhoto image: UIImage?) { }
 }
 
 
@@ -27,16 +30,25 @@ extension ProfileShotView
 {
     public enum Containment { case none, outside, inside }
 
-    public enum InitializationStatus
+    public enum InitializationError
     {
-        case success
         case accessDenied
         case noCapableCamera
         case cameraInputError
         case videoOutputError
         case photoOutputError
         case metadataOutputError
-        case error(Error)
+        case other(Error)
+    }
+    
+    public enum State
+    {
+        case uninitialized
+        case initialized
+        case error(error: InitializationError)
+        case running
+        case capturing
+        case captured(uiImage: UIImage?)
     }
 }
 
@@ -121,6 +133,13 @@ public class ProfileShotView: UIView
         }
     }
 
+    public private(set) var state: State = .uninitialized
+    {
+        didSet {
+            delegate?.profileShotView(self, didChangeState: state)
+        }
+    }
+
     public weak var delegate: ProfileShotViewDelegate? = nil
 
 
@@ -167,14 +186,18 @@ public class ProfileShotView: UIView
         _videoLayer.isHidden = false
         _photoLayer.isHidden = true
         if !suspended {
-            _session.startRunning()
+            DispatchQueue.global(qos: .default).async {
+                self._session.startRunning()
+            }
         }
     }
 
     public func stopCamera()
     {
 //        _videoLayer.isHidden = true
-        _session.stopRunning()
+        DispatchQueue.global(qos: .default).async {
+            self._session.stopRunning()
+        }
         containment = .none
         
         _cameraStarted = false
@@ -183,14 +206,18 @@ public class ProfileShotView: UIView
     public func suspend()
     {
         if _cameraStarted {
-            _session.stopRunning()
+            DispatchQueue.global(qos: .default).async {
+                self._session.stopRunning()
+            }
         }
     }
 
     public func resume()
     {
         if _cameraStarted {
-            _session.startRunning()
+            DispatchQueue.global(qos: .default).async {
+                self._session.startRunning()
+            }
         }
     }
     
@@ -250,7 +277,7 @@ extension ProfileShotView
 
 extension ProfileShotView
 {
-    public func initialize(_ position: AVCaptureDevice.Position = .unspecified, completion: @escaping (_ status: InitializationStatus)->())
+    public func initialize(_ position: AVCaptureDevice.Position = .unspecified, completion: @escaping (_ error: InitializationError?)->())
     {
         switch AVCaptureDevice.authorizationStatus(for: .video)
         {
@@ -275,9 +302,9 @@ extension ProfileShotView
         }
     }
     
-    private func _configureCaptureSession(_ position: AVCaptureDevice.Position, completion: (_ status: InitializationStatus)->())
+    private func _configureCaptureSession(_ position: AVCaptureDevice.Position, completion: (_ error: InitializationError?)->())
     {
-        _frontCamera = AVCaptureDevice.default(.builtInTrueDepthCamera, for: .video, position: .front)
+        _frontCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
         _backCamera = AVCaptureDevice.default(.builtInDualCamera, for: .video, position: .back)
         
         let prefCamera: AVCaptureDevice?
@@ -295,7 +322,7 @@ extension ProfileShotView
         _addInputOutput(camera, completion: completion)
     }
     
-    private func _addInputOutput(_ camera: AVCaptureDevice, completion: (_ status: InitializationStatus)->())
+    private func _addInputOutput(_ camera: AVCaptureDevice, completion: (_ error: InitializationError?)->())
     {
         _session.inputs.forEach { _session.removeInput($0) }
         _session.outputs.forEach { _session.removeOutput($0) }
@@ -309,7 +336,7 @@ extension ProfileShotView
             _session.addInput(cameraInput)
             _captureDevice = camera
         } catch {
-            completion(.error(error))
+            completion(.other(error))
             return
         }
 
@@ -340,7 +367,7 @@ extension ProfileShotView
             }
             camera.unlockForConfiguration()
         } catch {
-            completion(.error(error))
+            completion(.other(error))
             return
         }
 
@@ -350,7 +377,7 @@ extension ProfileShotView
             completion(.photoOutputError)
             return
         }
-        
+
         _session.addOutput(_photoOutput)
         _photoOutput.isHighResolutionCaptureEnabled = true
         _photoOutput.isDepthDataDeliveryEnabled = true  // a requirement for portraitEffectsMatte
@@ -359,8 +386,6 @@ extension ProfileShotView
         let photoConnection = _photoOutput.connection(with: .video)
         photoConnection?.videoOrientation = orientation
         photoConnection?.isVideoMirrored = _isMirrored
-        
-        completion(.success)
         
         // Metadata output (for the face)
         
@@ -374,6 +399,8 @@ extension ProfileShotView
         }
         
         metadataOutput.metadataObjectTypes = [.face]
+
+        completion(nil)  // success
     }
     
     public func _switchCamera(_ position: AVCaptureDevice.Position?)
@@ -431,10 +458,12 @@ extension ProfileShotView
     {
         _videoLayer.drawOverlays(faceRect: nil, cropRect: nil)
 //        _videoLayer.session = nil
-        _session.stopRunning()
-        
-        if let currentInput = _session.inputs.first {
-            _session.removeInput(currentInput)
+        DispatchQueue.global().async {
+            self._session.stopRunning()
+            
+            if let currentInput = self._session.inputs.first {
+                self._session.removeInput(currentInput)
+            }
         }
     }
 
@@ -443,9 +472,11 @@ extension ProfileShotView
         containment = .none
 
         _addInputOutput(camera, completion: { _ in })
-        
+                
 //        _videoLayer.session = _session
-        _session.startRunning()
+        DispatchQueue.global().async {
+            self._session.startRunning()
+        }
     }
 }
 
@@ -509,7 +540,7 @@ extension ProfileShotView: AVCaptureVideoDataOutputSampleBufferDelegate
 
         DispatchQueue.main.async { [weak self] in
             self?._displayVideoOverlays()
-    }
+        }
 
         // Capture photo if smiling
         if !_isCapturingPhoto && captureWhenSmiling && bestFace?.hasSmile == true { capturePhoto() }
@@ -610,11 +641,16 @@ extension ProfileShotView: AVCapturePhotoCaptureDelegate
             photoSettings.previewPhotoFormat = nil
             photoSettings.isDepthDataFiltered = true
             _isCapturingPhoto = true
+            state = .capturing
             DispatchQueue.main.async {
                 self.delegate?.profileShotView(self, willCapturePhoto: true)
                 self._photoOutput.capturePhoto(with: photoSettings, delegate: self)
             }
         } else {
+            // NOTE:
+            // What is going on here? We are reporting that we will not capture... why?
+            // Are we explicityly reporting that we are not going to honour the capture request?
+            // Is this a situation where 'state' should report an error?
             DispatchQueue.main.async {
                 self.delegate?.profileShotView(self, willCapturePhoto: false)
             }
@@ -629,13 +665,18 @@ extension ProfileShotView: AVCapturePhotoCaptureDelegate
         guard
             let cgImageRef = photo.cgImageRepresentation()
         else {
+            // NOTE:
+            // We captured nothing.
+            // Should this rather report an error to 'state'?
+            state = .captured(uiImage: nil)
             DispatchQueue.main.async {
                 self.delegate?.profileShotView(self, didCapturePhoto: nil)
             }
             return
         }
 
-        let image = CIImage(cgImage: cgImageRef.takeUnretainedValue())
+//        let image = CIImage(cgImage: cgImageRef.takeUnretainedValue())
+        let image = CIImage(cgImage: cgImageRef)
         var maskedImage = image
         if let matte = photo.portraitEffectsMatte {
             let mask = CIImage(cvPixelBuffer: matte.mattingImage)
@@ -666,6 +707,10 @@ extension ProfileShotView: AVCapturePhotoCaptureDelegate
         let normVideoRect = _videoLayer.normRect(layerRect: useRect, captureSize: maskedImage.extent.size)
         
         guard let croppedCGImage = _getCroppedCGImage(maskedImage, relCIRect: normVideoRect) else {
+            // NOTE:
+            // We captured nothing.
+            // Should this rather report an error to 'state'?
+            state = .captured(uiImage: nil)
             DispatchQueue.main.async {
                 self.delegate?.profileShotView(self, didCapturePhoto: nil)
             }
@@ -676,6 +721,7 @@ extension ProfileShotView: AVCapturePhotoCaptureDelegate
         let saveableImage = _getSaveableImage(cgImage: croppedCGImage)
         
         let layerRect = useRect
+        state = .captured(uiImage: saveableImage)
         DispatchQueue.main.async {
             self._displayPhoto(croppedCGImage, layerRect: layerRect)
             self.delegate?.profileShotView(self, didCapturePhoto: saveableImage)

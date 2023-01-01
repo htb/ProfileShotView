@@ -1,7 +1,7 @@
 import CoreImage
 
 
-internal class ImageFilters
+public class ImageFilters
 {
     public static func matteMask(image: CIImage, background: CIImage, mask: CIImage) -> CIImage
     {
