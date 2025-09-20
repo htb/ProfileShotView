@@ -304,9 +304,9 @@ extension ProfileShotView
     
     private func _configureCaptureSession(_ position: AVCaptureDevice.Position, completion: (_ error: InitializationError?)->())
     {
-        _frontCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
+        _frontCamera = AVCaptureDevice.default(.builtInTrueDepthCamera, for: .video, position: .front)
         _backCamera = AVCaptureDevice.default(.builtInDualCamera, for: .video, position: .back)
-        
+
         let prefCamera: AVCaptureDevice?
         if position == .front { prefCamera = _frontCamera }
         else if position == .back { prefCamera = _backCamera }
@@ -321,7 +321,7 @@ extension ProfileShotView
         
         _addInputOutput(camera, completion: completion)
     }
-    
+
     private func _addInputOutput(_ camera: AVCaptureDevice, completion: (_ error: InitializationError?)->())
     {
         _session.inputs.forEach { _session.removeInput($0) }
